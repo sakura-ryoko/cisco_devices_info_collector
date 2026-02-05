@@ -131,6 +131,7 @@ Make sure that you have all the necessary modules installed before you run the s
 To get information about how to install modules in Python see
 https://docs.python.org/3/installing/index.html
 
-# Future plans
-- Perhaps someone with actual Python knowledge can follow up from Gemini's code.
 ....
+
+# Future plans
+- Perhaps someone with actual Python knowledge can follow up from Gemini's modernization code.
