@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Modernized Cisco Inventory Script
+Modernized Cisco Inventory Script (As Done by Google Gemini)
 Target: Python 3.12+ (Forward compatible with 3.14)
 Optimized for concurrency, reliability, and detailed reporting.
 """
