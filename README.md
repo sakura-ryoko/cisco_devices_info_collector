@@ -121,6 +121,8 @@ Make sure that you have all the necessary third-party modules installed before y
 You can install them using the generated requirements file:
 
 
+# Future plans
+- Perhaps someone with actual Python knowledge can follow up from Gemini's modernization code.
 
 ```bash
 
@@ -132,6 +134,3 @@ To get information about how to install modules in Python see
 https://docs.python.org/3/installing/index.html
 
 ....
-
-# Future plans
-- Perhaps someone with actual Python knowledge can follow up from Gemini's modernization code.
