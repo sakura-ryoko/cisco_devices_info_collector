@@ -47,6 +47,8 @@ class DeviceResult:
     # Basic info (from show version/sysinfo)
     os_version: str | None = None
     uptime: str | None = None
+    pid: str | None = None  # Added explicitly for fallback
+    sn: str | None = None   # Added explicitly for fallback
     # Detailed Inventory (List of dicts for all components)
     inventory_items: list[dict] = field(default_factory=list)
     # Storage for raw text
@@ -234,13 +236,9 @@ def parse_data(results: list[DeviceResult]) -> None:
                     fsm_results = fsm.ParseText(output)
                     if not fsm_results: continue
                         
-                    # --- NEW LOGIC: Capture ALL rows ---
-                    
                     if cmd == 'show inventory':
-                        # Iterate through EVERY component found
                         for row in fsm_results:
                             row_dict = dict(zip(fsm.header, row))
-                            # Add to device's inventory list
                             device.inventory_items.append({
                                 'NAME': row_dict.get('NAME', ''),
                                 'DESCR': row_dict.get('DESCR', ''),
@@ -253,6 +251,16 @@ def parse_data(results: list[DeviceResult]) -> None:
                         first_row = dict(zip(fsm.header, fsm_results[0]))
                         device.os_version = first_row.get('VERSION', '')
                         device.uptime = first_row.get('UPTIME', '')
+                        
+                        # [FIX] Capture Serial from show version if available
+                        raw_serials = first_row.get('SERIAL', [])
+                        if raw_serials and isinstance(raw_serials, list):
+                            device.sn = raw_serials[0]
+                            
+                        # [FIX] Capture PID from show version if available
+                        raw_pids = first_row.get('HARDWARE', [])
+                        if raw_pids and isinstance(raw_pids, list):
+                            device.pid = raw_pids[0]
                         
                     elif cmd == 'show sysinfo':
                         first_row = dict(zip(fsm.header, fsm_results[0]))
@@ -274,40 +282,22 @@ def save_reports(results: list[DeviceResult]) -> None:
     def clean_for_excel(text: Any) -> str:
         """
         Aggressively cleans text to prevent Excel XML corruption.
-        Removes: C0/C1 controls, Surrogates, DEL, and specific formatting markers.
         """
-        if text is None:
-            return ""
-        
-        # 1. Convert to string
+        if text is None: return ""
         text = str(text)
-        
-        # 2. Remove C0 Control Chars (ASCII 0-31) except Tab (\t), Newline (\n), Carriage Return (\r)
-        #    Also removes Delete (\x7F)
         text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
-        
-        # 3. Remove C1 Control Chars (Unicode \u0080-\u009F)
-        #    These are invisible "Latin-1 Supplement" controls often found in CLI output.
         text = re.sub(r'[\u0080-\u009F]', '', text)
-        
-        # 4. Remove Unicode Surrogates (Illegal in XML: \uD800-\uDFFF)
         text = re.sub(r'[\uD800-\uDFFF]', '', text)
-        
-        # 5. Excel Cell Limit: Truncate to 32,000 characters (Excel limit is 32,767)
-        if len(text) > 32000:
-            text = text[:32000] + "...(truncated)"
-            
+        if len(text) > 32000: text = text[:32000] + "...(truncated)"
         return text.strip()
     # -------------------------------
 
-    # 1. Create Log Directory
     log_dir = Path("device_logs")
     log_dir.mkdir(exist_ok=True)
     
     print(f"\nSaving raw logs to '{log_dir}/'...")
 
     for d in results:
-        # Clean hostname for filename safety
         clean_hostname = re.sub(r'[\\/*?:"<>|]', "", d.hostname)
         filename = log_dir / f"{clean_hostname}_{d.ip}.txt"
         
@@ -325,7 +315,6 @@ def save_reports(results: list[DeviceResult]) -> None:
             logger.error(f"Could not save log for {d.ip}: {e}")
 
     # 2. Save Standard Device Summary
-    # 'strings_to_formulas': False prevents "=" at start of text being treated as math
     wb = xlsxwriter.Workbook('device_summary.xlsx', {'strings_to_formulas': False})
     ws = wb.add_worksheet("Summary")
     
@@ -338,9 +327,17 @@ def save_reports(results: list[DeviceResult]) -> None:
     for i, d in enumerate(results, start=1):
         main_pid = ""
         main_sn = ""
+        
+        # Priority 1: Show Inventory
         if d.inventory_items:
             main_pid = clean_for_excel(d.inventory_items[0].get('PID', ''))
             main_sn = clean_for_excel(d.inventory_items[0].get('SN', ''))
+        
+        # Priority 2: Show Version (Fallback for XE devices)
+        if not main_sn and d.sn:
+            main_sn = clean_for_excel(d.sn)
+        if not main_pid and d.pid:
+            main_pid = clean_for_excel(d.pid)
             
         status = "Error" if d.error else "OK"
         ws.write_row(i, 0, [
@@ -369,24 +366,37 @@ def save_reports(results: list[DeviceResult]) -> None:
     
     row_idx = 1
     for d in results:
-        # Iterate every component found
-        for item in d.inventory_items:
-            # Apply cleaning to ALL fields
+        # If inventory is empty, maybe create a row from show version data?
+        # Only if we have something to show
+        if not d.inventory_items and d.sn:
             ws_full.write_row(row_idx, 0, [
-                clean_for_excel(d.ip), 
-                clean_for_excel(d.hostname), 
-                clean_for_excel(item.get('NAME', '')),
-                clean_for_excel(item.get('DESCR', '')),
-                clean_for_excel(item.get('PID', '')),
-                clean_for_excel(item.get('VID', '')),
-                clean_for_excel(item.get('SN', ''))
+                clean_for_excel(d.ip),
+                clean_for_excel(d.hostname),
+                "Main Chassis (Derived from Show Version)",
+                "Auto-Detected",
+                clean_for_excel(d.pid),
+                "",
+                clean_for_excel(d.sn)
             ])
             row_idx += 1
+        else:
+            for item in d.inventory_items:
+                ws_full.write_row(row_idx, 0, [
+                    clean_for_excel(d.ip), 
+                    clean_for_excel(d.hostname), 
+                    clean_for_excel(item.get('NAME', '')),
+                    clean_for_excel(item.get('DESCR', '')),
+                    clean_for_excel(item.get('PID', '')),
+                    clean_for_excel(item.get('VID', '')),
+                    clean_for_excel(item.get('SN', ''))
+                ])
+                row_idx += 1
             
     wb_full.close()
     
     print(f"\n-> Summary Report: 'device_summary.xlsx'")
     print(f"-> Full Component Report: 'full_component_inventory.xlsx'")
+
 
 # --- MAIN EXECUTION ---
 
@@ -448,3 +458,4 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         print("\nScript cancelled by user.")
         sys.exit(0)
+        
